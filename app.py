@@ -4,43 +4,40 @@ import streamlit as st
 import os
 import io
 from PIL import Image
-import pdf2image
+import fitz  # PyMuPDF
 import google.generativeai as genai
 
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
 
-# Configure Google Gemini API with your API key
+# Use st.secrets if deploying on Streamlit Cloud (uncomment below if needed)
+# genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+
+# Local run:
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
 # === Helper Functions ===
 
-def get_gemini_response(input, pdf_content, prompt):
-    # Use the updated model name (deprecated model replaced)
+def get_gemini_response(input_text, pdf_content, prompt):
     model = genai.GenerativeModel('gemini-1.5-flash')
-
-    response = model.generate_content([input, pdf_content[0], prompt])
+    response = model.generate_content([input_text, pdf_content[0], prompt])
     return response.text
 
 def input_pdf_setup(uploaded_file):
     if uploaded_file is not None:
-        # Specify your local poppler path here
-        poppler_path = r"C:\Program Files (x86)\poppler\Library\bin"  # <-- update if needed
-        
-        # Convert PDF bytes to images
-        images = pdf2image.convert_from_bytes(uploaded_file.read(), poppler_path=poppler_path)
-        first_page = images[0]
+        pdf_data = uploaded_file.read()
+        doc = fitz.open(stream=pdf_data, filetype="pdf")
+        page = doc.load_page(0)
+        pix = page.get_pixmap()
 
-        # Convert first page image to bytes (JPEG)
         img_byte_arr = io.BytesIO()
-        first_page.save(img_byte_arr, format='JPEG')
-        img_byte_arr = img_byte_arr.getvalue()
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        img.save(img_byte_arr, format='JPEG')
 
-        # Prepare base64 encoded image dictionary for the API
         pdf_parts = [
             {
                 "mime_type": "image/jpeg",
-                "data": base64.b64encode(img_byte_arr).decode()
+                "data": base64.b64encode(img_byte_arr.getvalue()).decode()
             }
         ]
         return pdf_parts
@@ -55,7 +52,7 @@ st.header("ATS Tracking System")
 input_text = st.text_area("Job Description:", key="input")
 uploaded_file = st.file_uploader("Upload your resume (PDF)...", type=["pdf"])
 
-if uploaded_file is not None:
+if uploaded_file:
     st.success("✅ PDF Uploaded Successfully")
 
 submit1 = st.button("Tell Me About the Resume")
@@ -74,20 +71,15 @@ Give me the percentage of match if the resume matches the job description.
 First, the output should come as percentage, then keywords missing, and finally final thoughts.
 """
 
-if submit1:
-    if uploaded_file is not None:
-        pdf_content = input_pdf_setup(uploaded_file)
-        response = get_gemini_response(input_prompt1, pdf_content, input_text)
-        st.subheader("The Response is")
-        st.write(response)
-    else:
-        st.warning("Please upload the resume.")
-
-elif submit3:
-    if uploaded_file is not None:
-        pdf_content = input_pdf_setup(uploaded_file)
-        response = get_gemini_response(input_prompt3, pdf_content, input_text)
-        st.subheader("The Response is")
-        st.write(response)
-    else:
-        st.warning("Please upload the resume.")
+if submit1 and uploaded_file:
+    pdf_content = input_pdf_setup(uploaded_file)
+    response = get_gemini_response(input_text, pdf_content, input_prompt1)
+    st.subheader("The Response is")
+    st.write(response)
+elif submit3 and uploaded_file:
+    pdf_content = input_pdf_setup(uploaded_file)
+    response = get_gemini_response(input_text, pdf_content, input_prompt3)
+    st.subheader("The Response is")
+    st.write(response)
+elif (submit1 or submit3) and not uploaded_file:
+    st.warning("⚠️ Please upload a PDF resume first.")
